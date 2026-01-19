@@ -209,19 +209,24 @@ const DemonListTracker = () => {
     const numValue = value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(value) || 0));
     const table = isExtended ? 'extended_levels' : 'levels';
 
+    console.log(`Saving progress: level ${levelId}, player ${player}, value ${numValue}, table ${table}`);
+
     setSaving(true);
     const updateData = {
       [player]: numValue,
       [`${player}_locked`]: null
     };
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from(table)
       .update(updateData)
-      .eq('id', levelId);
+      .eq('id', levelId)
+      .select();
 
     if (error) {
       console.error('Error updating progress:', error);
+    } else {
+      console.log('Successfully saved:', data);
     }
     setSaving(false);
   };
@@ -514,6 +519,7 @@ const DemonListTracker = () => {
                             e.target.blur();
                           }
                         }}
+                        onBlur={(e) => saveProgress(level.id, player, e.target.value, isExtended)}
                         className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <span className="text-white/70 text-sm">%</span>
@@ -744,7 +750,7 @@ const DemonListTracker = () => {
             <li>Click the refresh button (↻) to manually reload data</li>
             <li>Higher GDDL rank = harder level (e.g., 25.56 is rank #1)</li>
             <li>Only the top 25 levels appear on the main list</li>
-            <li>Enter progress as a percentage (0-100) for each player, then press Enter to save</li>
+            <li>Enter progress as a percentage (0-100) - saves when you press Enter or click away</li>
             <li>100% completion awards the full level points, lower percentages award fractional points (e.g., 23% = 0.23 points)</li>
             <li>Total Points includes points from both Main and Extended lists</li>
           </ul>
