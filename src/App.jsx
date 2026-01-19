@@ -578,29 +578,45 @@ const DemonListTracker = () => {
                 <td className="px-4 py-3 text-white font-semibold">{level.name}</td>
                 <td className="px-4 py-3 text-blue-200">{level.creator}</td>
                 <td className="px-4 py-3 text-center text-yellow-300">{level.gddl_rank.toFixed(2)}</td>
-                <td className="px-4 py-3 text-center text-green-300 font-bold">{level.points}</td>
+                <td className="px-4 py-3 text-center text-green-300 font-bold">{calculatePointsFromRank(level.rank)}</td>
                 
-                {players.map(player => (
-                  <td key={player} className="px-4 py-3 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={level[player] || 0}
-                        onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            saveProgress(level.id, player, e.target.value, isExtended);
-                            e.target.blur();
-                          }
-                        }}
-                        onBlur={(e) => saveProgress(level.id, player, e.target.value, isExtended)}
-                        className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                      />
-                      <span className="text-white/70 text-sm">%</span>
-                    </div>
-                  </td>
-                ))}
+                {players.map(player => {
+                  const isLocked = level[`${player}_locked`] !== null;
+                  const isExtended = level.rank > 25;
+                  const canEdit = !isExtended || isLocked; // Can only edit extended if already have locked points
+                  
+                  return (
+                    <td key={player} className="px-4 py-3 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        {isLocked ? (
+                          <div className="flex items-center gap-1 text-green-400 font-bold">
+                            <span>🔒 {level[`${player}_locked`]} pts</span>
+                          </div>
+                        ) : canEdit ? (
+                          <>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={level[player] || 0}
+                              onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  saveProgress(level.id, player, e.target.value, isExtended);
+                                  e.target.blur();
+                                }
+                              }}
+                              onBlur={(e) => saveProgress(level.id, player, e.target.value, isExtended)}
+                              className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <span className="text-white/70 text-sm">%</span>
+                          </>
+                        ) : (
+                          <span className="text-gray-500 text-sm">No points</span>
+                        )}
+                      </div>
+                    </td>
+                  );
+                })}
                 
                 <td className="px-4 py-3 text-center">
                   <button
@@ -846,10 +862,12 @@ const DemonListTracker = () => {
             <li><strong>🌐 LIVE SYNCING:</strong> Changes sync automatically across all devices!</li>
             <li>Click the refresh button (↻) to manually reload data</li>
             <li>Higher GDDL rank = harder level (e.g., 25.56 is rank #1)</li>
-            <li>Only the top 25 levels appear on the main list</li>
+            <li>Only the top 25 levels appear on the main list and award points</li>
+            <li>Points are auto-calculated: Rank 1 = 25 pts, Rank 2 = 24 pts, ..., Rank 25 = 1 pt</li>
+            <li>Extended list levels (rank 26+) are worth 0 points</li>
             <li>Enter progress as a percentage (0-100) - saves when you press Enter or click away</li>
-            <li>100% completion awards the full level points, lower percentages award fractional points (e.g., 23% = 0.23 points)</li>
-            <li>Total Points includes points from both Main and Extended lists</li>
+            <li>100% completion locks in the points at the current rank - they won't change if rankings shift</li>
+            <li>Total Points includes points from both Main and Extended lists (locked points persist)</li>
           </ul>
         </div>
       </div>
