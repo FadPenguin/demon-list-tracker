@@ -183,21 +183,11 @@ const DemonListTracker = () => {
     return currentPoints + bankedPoints[player];
   };
 
-  const updateProgress = async (id, player, value, isExtended = false) => {
+const updateProgress = async (id, player, value, isExtended = false) => {
     const numValue = Math.max(0, Math.min(100, Number(value) || 0));
     const table = isExtended ? 'extended_levels' : 'levels';
     
-    const listToUpdate = isExtended ? extendedList : levels;
-    const level = listToUpdate.find(l => l.id === id);
-    
-    const wasCompleted = level[player] === 100;
-    const isNowCompleted = numValue === 100;
-    
     const updates = { [player]: numValue };
-    
-    if (!wasCompleted && isNowCompleted) {
-      updates[`${player}_locked`] = level.points;
-    }
 
     const { error } = await supabase
       .from(table)
