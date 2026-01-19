@@ -255,7 +255,15 @@ const DemonListTracker = () => {
     setSaving(true);
 
     try {
-      // Step 1: Insert the new level into a temporary holding area (we'll determine table later)
+      // Step 1: Get fresh data from database to ensure we have latest values
+      const { data: freshMainLevels } = await supabase.from('levels').select('*').order('rank');
+      const { data: freshExtendedLevels } = await supabase.from('extended_levels').select('*').order('rank');
+      
+      const allCurrentLevels = [...(freshMainLevels || []), ...(freshExtendedLevels || [])];
+      
+      console.log('Fresh data loaded, total levels:', allCurrentLevels.length);
+      
+      // Step 2: Create new level
       const newLevel = {
         name: newLevelData.name,
         creator: newLevelData.creator,
@@ -266,76 +274,49 @@ const DemonListTracker = () => {
         jack: 0,
         judah_locked: null,
         whitman_locked: null,
-        jack_locked: null,
-        rank: 9999 // Temporary rank
+        jack_locked: null
       };
 
-      // Step 2: Get all current levels
-      const allCurrentLevels = [...levels, ...extendedList];
-      
-      // Step 3: Determine where new level ranks
+      // Step 3: Determine proper ranking with new level included
       const allWithNew = [...allCurrentLevels, newLevel].sort((a, b) => b.gddl_rank - a.gddl_rank);
-      const newLevelPosition = allWithNew.findIndex(l => 
+      const newLevelRank = allWithNew.findIndex(l => 
         l.name === newLevel.name && 
         l.gddl_rank === newLevel.gddl_rank &&
         !l.id
-      ) + 1; // Position is 1-indexed
+      ) + 1;
 
-      console.log('New level will be rank:', newLevelPosition);
+      console.log('New level will be rank:', newLevelRank);
 
-      // Step 4: Insert into correct table
-      const targetTable = newLevelPosition <= 25 ? 'levels' : 'extended_levels';
-      
+      // Step 4: Determine final placement for all levels
+      const top25Ids = allWithNew.slice(0, 25).map(l => l.id).filter(Boolean);
+      const beyond25Ids = allWithNew.slice(25).map(l => l.id).filter(Boolean);
+
+      console.log('Top 25 should contain IDs:', top25Ids);
+      console.log('Extended should contain IDs:', beyond25Ids);
+
+      // Step 5: Insert new level into correct table
+      const newLevelTable = newLevelRank <= 25 ? 'levels' : 'extended_levels';
       const { data: insertedLevel, error: insertError } = await supabase
-        .from(targetTable)
-        .insert([{ ...newLevel, rank: newLevelPosition }])
+        .from(newLevelTable)
+        .insert([{ ...newLevel, rank: newLevelRank }])
         .select()
         .single();
 
-      if (insertError) {
-        console.error('Insert error:', insertError);
-        throw insertError;
-      }
+      if (insertError) throw insertError;
+      console.log('Inserted new level:', insertedLevel.name, 'at rank', newLevelRank);
 
-      console.log('Inserted new level:', insertedLevel);
-
-      // Step 5: Recalculate all ranks
-      const allLevelsAfterInsert = [...allCurrentLevels, insertedLevel].sort((a, b) => b.gddl_rank - a.gddl_rank);
-      
-      // Step 6: Update each level's rank in its current table
-      for (let i = 0; i < allLevelsAfterInsert.length; i++) {
-        const level = allLevelsAfterInsert[i];
-        const newRank = i + 1;
-        
-        // Determine current table
-        const isInMain = levels.find(l => l.id === level.id);
-        const isInExtended = extendedList.find(l => l.id === level.id);
-        const currentTable = isInMain ? 'levels' : isInExtended ? 'extended_levels' : targetTable;
-        
-        // Log what we're updating
-        if (level.id !== insertedLevel.id) {
-          console.log(`Updating rank for ${level.name} in ${currentTable}, old rank: ${level.rank}, new rank: ${newRank}, progress: j=${level.judah} w=${level.whitman} k=${level.jack}`);
-        }
-        
-        // Update rank
-        if (level.id !== insertedLevel.id) { // Don't update the one we just inserted
-          await supabase
-            .from(currentTable)
-            .update({ rank: newRank })
-            .eq('id', level.id);
-        }
-      }
-
-      // Step 7: Handle moves between tables
-      const top25After = allLevelsAfterInsert.slice(0, 25);
-      const beyond25After = allLevelsAfterInsert.slice(25);
-
+      // Step 6: Handle levels that need to move FROM main TO extended
       let pointsToBank = { judah: 0, whitman: 0, jack: 0 };
-
-      // Find levels in 'levels' table that should now be in 'extended_levels' (rank > 25)
-      for (const level of levels) {
-        if (!top25After.find(l => l.id === level.id)) {
-          console.log('Moving to extended:', level.name, 'with progress:', level.judah, level.whitman, level.jack);
+      
+      for (const level of allCurrentLevels) {
+        // Currently in main list
+        const currentlyInMain = freshMainLevels.find(l => l.id === level.id);
+        if (!currentlyInMain) continue;
+        
+        // Should now be in extended (not in top 25)
+        if (!top25Ids.includes(level.id)) {
+          console.log(`Level "${level.name}" needs to move from main to extended`);
+          console.log('  Current progress:', { judah: level.judah, whitman: level.whitman, jack: level.jack });
           
           // Calculate points to bank
           ['judah', 'whitman', 'jack'].forEach(player => {
@@ -346,37 +327,33 @@ const DemonListTracker = () => {
               pointsToBank[player] += progress / 100;
             }
           });
-
-          const newRank = beyond25After.findIndex(l => l.id === level.id) + 26;
           
-          // Copy to extended_levels - RESET progress to 0 since we're banking the points
-          const { error: copyError } = await supabase
-            .from('extended_levels')
-            .insert([{
-              name: level.name,
-              creator: level.creator,
-              gddl_rank: level.gddl_rank,
-              points: level.points,
-              rank: newRank,
-              judah: 0,
-              whitman: 0,
-              jack: 0,
-              judah_locked: null,
-              whitman_locked: null,
-              jack_locked: null
-            }]);
+          // Get new rank in extended list
+          const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
           
-          if (copyError) {
-            console.error('Copy error:', copyError);
-            throw copyError;
-          }
-
-          // Delete from levels
+          // Insert into extended_levels - PRESERVE all progress data
+          await supabase.from('extended_levels').insert([{
+            name: level.name,
+            creator: level.creator,
+            gddl_rank: level.gddl_rank,
+            points: level.points,
+            rank: newRank,
+            judah: level.judah,
+            whitman: level.whitman,
+            jack: level.jack,
+            judah_locked: level.judah_locked,
+            whitman_locked: level.whitman_locked,
+            jack_locked: level.jack_locked
+          }]);
+          
+          // Delete from main
           await supabase.from('levels').delete().eq('id', level.id);
+          
+          console.log(`  Moved to extended at rank ${newRank}, preserved progress`);
         }
       }
 
-      // Bank the points
+      // Step 7: Bank the points
       if (pointsToBank.judah > 0 || pointsToBank.whitman > 0 || pointsToBank.jack > 0) {
         console.log('Banking points:', pointsToBank);
         const { data: currentBanked } = await supabase
@@ -394,14 +371,20 @@ const DemonListTracker = () => {
           .eq('id', 1);
       }
 
-      // Find levels in 'extended_levels' that should now be in 'levels' (rank <= 25)
-      for (const level of extendedList) {
-        if (top25After.find(l => l.id === level.id)) {
-          console.log('Moving to main:', level.name);
+      // Step 8: Handle levels that need to move FROM extended TO main
+      for (const level of allCurrentLevels) {
+        // Currently in extended list
+        const currentlyInExtended = freshExtendedLevels.find(l => l.id === level.id);
+        if (!currentlyInExtended) continue;
+        
+        // Should now be in main (in top 25)
+        if (top25Ids.includes(level.id)) {
+          console.log(`Level "${level.name}" needs to move from extended to main`);
           
-          const newRank = top25After.findIndex(l => l.id === level.id) + 1;
+          // Get new rank in main list
+          const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
           
-          // Copy to levels - explicitly list all fields to preserve
+          // Insert into levels - PRESERVE all progress data
           await supabase.from('levels').insert([{
             name: level.name,
             creator: level.creator,
@@ -416,12 +399,36 @@ const DemonListTracker = () => {
             jack_locked: level.jack_locked
           }]);
           
-          // Delete from extended_levels
+          // Delete from extended
           await supabase.from('extended_levels').delete().eq('id', level.id);
+          
+          console.log(`  Moved to main at rank ${newRank}, preserved progress`);
         }
       }
 
-      // Reload everything
+      // Step 9: Update ranks for levels that stayed in their current table
+      for (const level of allCurrentLevels) {
+        const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
+        const shouldBeInMain = top25Ids.includes(level.id);
+        const currentlyInMain = freshMainLevels.find(l => l.id === level.id);
+        const currentlyInExtended = freshExtendedLevels.find(l => l.id === level.id);
+        
+        // If staying in main
+        if (shouldBeInMain && currentlyInMain) {
+          await supabase.from('levels').update({ rank: newRank }).eq('id', level.id);
+          console.log(`Updated rank for "${level.name}" in main list to ${newRank}`);
+        }
+        
+        // If staying in extended
+        if (!shouldBeInMain && currentlyInExtended) {
+          await supabase.from('extended_levels').update({ rank: newRank }).eq('id', level.id);
+          console.log(`Updated rank for "${level.name}" in extended list to ${newRank}`);
+        }
+      }
+
+      console.log('All operations complete, reloading data');
+
+      // Step 10: Reload everything
       await loadData();
       
       setShowAddModal(false);
