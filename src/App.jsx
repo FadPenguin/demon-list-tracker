@@ -7,6 +7,7 @@ const DemonListTracker = () => {
   const [extendedList, setExtendedList] = useState([]);
   const [currentView, setCurrentView] = useState('main');
   const [editingCell, setEditingCell] = useState(null);
+  const [players, setPlayers] = useState(['judah', 'whitman', 'jack']);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newLevelData, setNewLevelData] = useState({
     name: '',
@@ -369,6 +370,42 @@ const DemonListTracker = () => {
     setSaving(false);
   };
 
+  const addPlayer = async () => {
+    const playerName = prompt('Enter player name:');
+    if (!playerName || playerName.trim() === '') return;
+    
+    const sanitizedName = playerName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    
+    if (players.includes(sanitizedName)) {
+      alert('Player already exists!');
+      return;
+    }
+    
+    setSaving(true);
+    
+    try {
+      // Add columns to levels table
+      await supabase.rpc('add_player_columns', {
+        table_name: 'levels',
+        player_name: sanitizedName
+      });
+      
+      // Add columns to extended_levels table
+      await supabase.rpc('add_player_columns', {
+        table_name: 'extended_levels',
+        player_name: sanitizedName
+      });
+      
+      setPlayers([...players, sanitizedName]);
+      alert(`Added player: ${playerName}`);
+    } catch (error) {
+      console.error('Error adding player:', error);
+      alert('Error adding player. You may need to add columns manually in Supabase.');
+    }
+    
+    setSaving(false);
+  };
+
   const deleteLevel = async (levelId, isExtended = false) => {
     if (!window.confirm('Are you sure you want to delete this level?')) {
       return;
@@ -413,9 +450,9 @@ const DemonListTracker = () => {
               <th className="px-4 py-4 text-left text-white font-bold">Creator</th>
               <th className="px-4 py-4 text-center text-white font-bold">GDDL Rank</th>
               <th className="px-4 py-4 text-center text-white font-bold">Points</th>
-              <th className="px-4 py-4 text-center text-white font-bold">Judah</th>
-              <th className="px-4 py-4 text-center text-white font-bold">Whitman</th>
-              <th className="px-4 py-4 text-center text-white font-bold">Jack</th>
+              {players.map(player => (
+                <th key={player} className="px-4 py-4 text-center text-white font-bold capitalize">{player}</th>
+              ))}
               <th className="px-4 py-4 text-center text-white font-bold">Actions</th>
             </tr>
           </thead>
@@ -428,7 +465,7 @@ const DemonListTracker = () => {
                 <td className="px-4 py-3 text-center text-yellow-300">{level.gddl_rank.toFixed(2)}</td>
                 <td className="px-4 py-3 text-center text-green-300 font-bold">{level.points}</td>
                 
-                {['judah', 'whitman', 'jack'].map(player => (
+                {players.map(player => (
                   <td key={player} className="px-4 py-3 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <input
@@ -468,27 +505,33 @@ const DemonListTracker = () => {
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
                   Main List Points:
                 </td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', 'main').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', 'main').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', 'main').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-green-300 font-bold text-2xl">
+                    {calculateTotal(player, 'main').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
               <tr>
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
                   Extended List Points:
                 </td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('judah', 'extended').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('whitman', 'extended').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('jack', 'extended').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">
+                    {calculateTotal(player, 'extended').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
                   TOTAL POINTS (All Lists):
                 </td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('judah', 'both').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('whitman', 'both').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('jack', 'both').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-2xl font-bold">
+                    {calculateTotal(player, 'both').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
             </tfoot>
@@ -499,27 +542,33 @@ const DemonListTracker = () => {
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
                   Main List Points:
                 </td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', 'main').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', 'main').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', 'main').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-green-300 font-bold text-2xl">
+                    {calculateTotal(player, 'main').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
               <tr>
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
                   Extended List Points:
                 </td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('judah', 'extended').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('whitman', 'extended').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('jack', 'extended').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">
+                    {calculateTotal(player, 'extended').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
                   TOTAL POINTS (All Lists):
                 </td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('judah', 'both').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('whitman', 'both').toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('jack', 'both').toFixed(2)}</td>
+                {players.map(player => (
+                  <td key={player} className="px-4 py-4 text-center text-2xl font-bold">
+                    {calculateTotal(player, 'both').toFixed(2)}
+                  </td>
+                ))}
                 <td></td>
               </tr>
             </tfoot>
@@ -543,7 +592,7 @@ const DemonListTracker = () => {
         <div className="bg-white/10 backdrop-blur-md rounded-lg shadow-2xl p-6 mb-6">
           <div className="flex justify-between items-center mb-2">
             <h1 className="text-4xl font-bold text-white text-center flex-1">
-              Demon List Tracker
+              Demon Tracker
             </h1>
             <button
               onClick={loadData}
@@ -553,7 +602,7 @@ const DemonListTracker = () => {
               <RefreshCw size={20} />
             </button>
           </div>
-          <p className="text-blue-200 text-center">Track your extreme demon completions and progress</p>
+          <p className="text-blue-200 text-center">Track your demon completions and progress</p>
           {saving && <p className="text-yellow-300 text-center text-sm mt-2">Saving changes...</p>}
           <p className="text-green-300 text-center text-sm mt-2">✓ Real-time syncing with Supabase</p>
           
@@ -665,13 +714,20 @@ const DemonListTracker = () => {
           </div>
         )}
 
-        <div className="mt-6 text-center">
+        <div className="mt-6 text-center flex gap-4 justify-center">
           <button
             onClick={() => setShowAddModal(true)}
-            className="bg-gradient-to-r from-purple-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg flex items-center gap-2 mx-auto"
+            className="bg-gradient-to-r from-purple-600 to-blue-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-blue-700 transition-all shadow-lg flex items-center gap-2"
           >
             <Plus size={20} />
             Add Level
+          </button>
+          <button
+            onClick={addPlayer}
+            className="bg-gradient-to-r from-green-600 to-teal-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-green-700 hover:to-teal-700 transition-all shadow-lg flex items-center gap-2"
+          >
+            <Plus size={20} />
+            Add Player
           </button>
         </div>
 
