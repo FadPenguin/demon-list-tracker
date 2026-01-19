@@ -175,8 +175,8 @@ const DemonListTracker = () => {
       const progress = level[player];
       if (!progress || progress === 0) return sum;
       
-      const percentage = progress / 100;
-      const earnedPoints = level.points * percentage;
+      // Award fractional points: progress% of 1 point
+      const earnedPoints = progress / 100;
       return sum + earnedPoints;
     }, 0);
     
@@ -193,7 +193,7 @@ const DemonListTracker = () => {
     if (!levelToUpdate) return;
 
     const shouldLock = numValue === 100;
-    const lockedPoints = shouldLock ? levelToUpdate.points : null;
+    const lockedPoints = shouldLock ? 1 : null;
 
     setSaving(true);
     const updateData = {
@@ -243,11 +243,6 @@ const DemonListTracker = () => {
 
     const gddlRank = parseFloat(newLevelData.gddlRank);
     const points = parseInt(newLevelData.points);
-    
-    const isMainList = gddlRank >= 12.93;
-    const table = isMainList ? 'levels' : 'extended_levels';
-    const currentList = isMainList ? levels : extendedList;
-    const listSetter = isMainList ? setLevels : setExtendedList;
 
     const newLevel = {
       name: newLevelData.name,
@@ -264,28 +259,122 @@ const DemonListTracker = () => {
     };
 
     setSaving(true);
-    const { data, error } = await supabase
-      .from(table)
-      .insert([newLevel])
-      .select();
 
-    if (error) {
-      console.error('Error adding level:', error);
-      alert('Error adding level. Please try again.');
-    } else {
-      const updatedList = sortAndRankLevels([...currentList, data[0]]);
+    // Combine all levels (main + extended) to determine proper placement
+    const allLevels = [...levels, ...extendedList, newLevel];
+    const sortedLevels = allLevels.sort((a, b) => b.gddl_rank - a.gddl_rank);
+    
+    // Assign ranks based on sorted order
+    const rankedLevels = sortedLevels.map((level, index) => ({
+      ...level,
+      rank: index + 1
+    }));
+
+    // Split into main (top 25) and extended (26+)
+    const newMainList = rankedLevels.slice(0, 25);
+    const newExtendedList = rankedLevels.slice(25);
+
+    try {
+      // Determine which table the new level should go into
+      const newLevelRank = rankedLevels.find(l => 
+        l.name === newLevel.name && 
+        l.gddl_rank === newLevel.gddl_rank
+      ).rank;
+
+      const targetTable = newLevelRank <= 25 ? 'levels' : 'extended_levels';
+
+      // Insert the new level
+      const { data: insertedData, error: insertError } = await supabase
+        .from(targetTable)
+        .insert([newLevel])
+        .select();
+
+      if (insertError) throw insertError;
+
+      // Check if any levels need to be moved between tables
+      const currentMainIds = levels.map(l => l.id);
+      const currentExtendedIds = extendedList.map(l => l.id);
       
-      for (const level of updatedList) {
-        await supabase
-          .from(table)
-          .update({ rank: level.rank })
+      // Find levels that need to move from main to extended
+      const levelsToMoveToExtended = levels.filter(level => 
+        !newMainList.find(ml => ml.id === level.id)
+      );
+
+      // Find levels that need to move from extended to main
+      const levelsToMoveToMain = extendedList.filter(level => 
+        newMainList.find(ml => ml.id === level.id)
+      );
+
+      // Move levels from main to extended
+      for (const level of levelsToMoveToExtended) {
+        const newRank = rankedLevels.find(l => l.id === level.id)?.rank || level.rank;
+        
+        // Copy to extended_levels
+        const { error: copyError } = await supabase
+          .from('extended_levels')
+          .insert([{ ...level, rank: newRank }]);
+        
+        if (copyError) throw copyError;
+
+        // Delete from levels
+        const { error: deleteError } = await supabase
+          .from('levels')
+          .delete()
           .eq('id', level.id);
+        
+        if (deleteError) throw deleteError;
       }
+
+      // Move levels from extended to main
+      for (const level of levelsToMoveToMain) {
+        const newRank = rankedLevels.find(l => l.id === level.id)?.rank || level.rank;
+        
+        // Copy to levels
+        const { error: copyError } = await supabase
+          .from('levels')
+          .insert([{ ...level, rank: newRank }]);
+        
+        if (copyError) throw copyError;
+
+        // Delete from extended_levels
+        const { error: deleteError } = await supabase
+          .from('extended_levels')
+          .delete()
+          .eq('id', level.id);
+        
+        if (deleteError) throw deleteError;
+      }
+
+      // Update ranks for all levels in main list
+      for (const level of newMainList) {
+        if (level.id) { // Skip the new level without ID yet
+          await supabase
+            .from('levels')
+            .update({ rank: level.rank })
+            .eq('id', level.id);
+        }
+      }
+
+      // Update ranks for all levels in extended list
+      for (const level of newExtendedList) {
+        if (level.id) { // Skip the new level without ID yet
+          await supabase
+            .from('extended_levels')
+            .update({ rank: level.rank })
+            .eq('id', level.id);
+        }
+      }
+
+      // Reload all data
+      await loadData();
       
-      listSetter(updatedList);
       setShowAddModal(false);
       setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
+    } catch (error) {
+      console.error('Error adding level:', error);
+      alert('Error adding level. Please try again.');
     }
+    
     setSaving(false);
   };
 
@@ -358,12 +447,11 @@ const DemonListTracker = () => {
                       ) : (
                         <>
                           <input
-                            type="number"
-                            min="0"
-                            max="100"
+                            type="text"
+                            inputMode="numeric"
                             value={level[player] || 0}
                             onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
-                            className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                            className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                           <span className="text-white/70 text-sm">%</span>
                         </>
@@ -456,7 +544,7 @@ const DemonListTracker = () => {
         <div className="bg-white/10 backdrop-blur-md rounded-lg shadow-2xl p-6 mb-6">
           <div className="flex justify-between items-center mb-2">
             <h1 className="text-4xl font-bold text-white text-center flex-1">
-              Demon List Tracker
+              Demon List
             </h1>
             <button
               onClick={loadData}
@@ -466,7 +554,7 @@ const DemonListTracker = () => {
               <RefreshCw size={20} />
             </button>
           </div>
-          <p className="text-blue-200 text-center">Track your extreme demon completions and progress</p>
+          <p className="text-blue-200 text-center">Track your demon completions and progress</p>
           {saving && <p className="text-yellow-300 text-center text-sm mt-2">Saving changes...</p>}
           <p className="text-green-300 text-center text-sm mt-2">✓ Real-time syncing with Supabase</p>
           
@@ -595,7 +683,6 @@ const DemonListTracker = () => {
             <li>Click the refresh button (↻) to manually reload data</li>
             <li>Higher GDDL rank = harder level (e.g., 25.56 is rank #1)</li>
             <li>Only the top 25 levels appear on the main list</li>
-            <li>When a level is 100% completed, the point value is locked 🔒</li>
             <li>Enter progress as a percentage (0-100) for each player</li>
             <li>Total Points includes points from both Main and Extended lists</li>
           </ul>
