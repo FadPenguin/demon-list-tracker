@@ -873,6 +873,7 @@ const DemonListTracker = () => {
       </div>
     </div>
   );
+  }
 };
 
 export default DemonListTracker;
