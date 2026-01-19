@@ -52,6 +52,15 @@ const DemonListTracker = () => {
     
     if (data && data.length > 0) {
       setLevels(data);
+      // Extract player names from the first level's columns
+      const firstLevel = data[0];
+      const detectedPlayers = Object.keys(firstLevel).filter(key => 
+        !['id', 'rank', 'name', 'creator', 'gddl_rank', 'points', 'created_at'].includes(key) &&
+        !key.endsWith('_locked')
+      );
+      if (detectedPlayers.length > 0) {
+        setPlayers(detectedPlayers);
+      }
     } else {
       await initializeDefaultLevels();
     }
@@ -384,23 +393,38 @@ const DemonListTracker = () => {
     setSaving(true);
     
     try {
-      // Add columns to levels table
-      await supabase.rpc('add_player_columns', {
-        table_name: 'levels',
-        player_name: sanitizedName
+      // Add columns to levels table using raw SQL
+      const { error: levelsError } = await supabase.rpc('exec_sql', {
+        sql_query: `
+          ALTER TABLE levels 
+          ADD COLUMN IF NOT EXISTS ${sanitizedName} integer DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS ${sanitizedName}_locked integer;
+        `
       });
       
-      // Add columns to extended_levels table
-      await supabase.rpc('add_player_columns', {
-        table_name: 'extended_levels',
-        player_name: sanitizedName
+      if (levelsError) throw levelsError;
+      
+      // Add columns to extended_levels table using raw SQL
+      const { error: extendedError } = await supabase.rpc('exec_sql', {
+        sql_query: `
+          ALTER TABLE extended_levels 
+          ADD COLUMN IF NOT EXISTS ${sanitizedName} integer DEFAULT 0,
+          ADD COLUMN IF NOT EXISTS ${sanitizedName}_locked integer;
+        `
       });
       
+      if (extendedError) throw extendedError;
+      
+      // Add to players list
       setPlayers([...players, sanitizedName]);
-      alert(`Added player: ${playerName}`);
+      alert(`Successfully added player: ${playerName}`);
+      
+      // Reload data to get the new columns
+      await loadData();
     } catch (error) {
       console.error('Error adding player:', error);
-      alert('Error adding player. You may need to add columns manually in Supabase.');
+      alert('Error adding player. Make sure you have created the exec_sql function in Supabase (see console for details).');
+      console.log('To create the exec_sql function, run this in Supabase SQL Editor:\n\nCREATE OR REPLACE FUNCTION exec_sql(sql_query text)\nRETURNS void\nLANGUAGE plpgsql\nSECURITY DEFINER\nAS $$\nBEGIN\n  EXECUTE sql_query;\nEND;\n$$;');
     }
     
     setSaving(false);
@@ -510,7 +534,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'main').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
               <tr>
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
@@ -521,7 +545,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'extended').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
@@ -532,7 +556,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'both').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
             </tfoot>
           )}
@@ -547,7 +571,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'main').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
               <tr>
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
@@ -558,7 +582,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'extended').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
@@ -569,7 +593,7 @@ const DemonListTracker = () => {
                     {calculateTotal(player, 'both').toFixed(2)}
                   </td>
                 ))}
-                <td></td>
+                <td className="px-4 py-4"></td>
               </tr>
             </tfoot>
           )}
