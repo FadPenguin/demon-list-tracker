@@ -1,0 +1,52 @@
+🚀 QUICK START GUIDE 🚀
+======================
+
+Too long didn't read? Here's the speedrun version:
+
+
+1️⃣ CREATE ACCOUNTS (5 min)
+---------------------------
+□ GitHub.com - Sign up
+□ Supabase.com - Sign in with GitHub
+□ Netlify.com - Sign in with GitHub
+
+
+2️⃣ SET UP DATABASE (10 min)
+----------------------------
+□ Supabase → New Project → "demon-tracker"
+□ SQL Editor → Paste supabase-setup.sql → RUN
+□ Settings → API → Copy URL and anon key
+
+
+3️⃣ UPLOAD CODE (5 min)
+-----------------------
+□ GitHub → New repository → "demon-list-tracker"
+□ Upload ALL files from demon-tracker-deploy folder
+□ Commit changes
+
+
+4️⃣ DEPLOY WEBSITE (10 min)
+---------------------------
+□ Netlify → Add new site → Import from GitHub
+□ Choose demon-list-tracker
+□ Add environment variables:
+  - VITE_SUPABASE_URL = [your URL]
+  - VITE_SUPABASE_ANON_KEY = [your key]
+□ Build command: npm run build
+□ Publish directory: dist
+□ Deploy!
+
+
+5️⃣ TEST & SHARE (2 min)
+------------------------
+□ Open your website
+□ Test adding progress
+□ Share URL with friends!
+
+
+⏱️ Total time: ~30 minutes
+🎉 Result: Live website with real database!
+
+
+Need detailed instructions?
+→ Read DEPLOYMENT-GUIDE.txt
