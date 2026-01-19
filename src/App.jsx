@@ -349,19 +349,11 @@ const DemonListTracker = () => {
           }
         });
         
-        // Insert into extended_levels with ALL existing data preserved
+        // Insert into extended_levels with ALL existing data preserved (except id)
+        const { id, ...levelWithoutId } = levelData;
         await supabase.from('extended_levels').insert([{
-          name: levelData.name,
-          creator: levelData.creator,
-          gddl_rank: levelData.gddl_rank,
-          points: levelData.points,
-          rank: newRankData.rank,
-          judah: levelData.judah,
-          whitman: levelData.whitman,
-          jack: levelData.jack,
-          judah_locked: levelData.judah_locked,
-          whitman_locked: levelData.whitman_locked,
-          jack_locked: levelData.jack_locked
+          ...levelWithoutId,
+          rank: newRankData.rank
         }]);
         
         // Delete from levels
@@ -390,19 +382,11 @@ const DemonListTracker = () => {
         const levelData = extendedList.find(l => l.id === levelId);
         const newRankData = top25.find(l => l.id === levelId);
         
-        // Insert into levels with ALL existing data preserved
+        // Insert into levels with ALL existing data preserved (except id)
+        const { id, ...levelWithoutId } = levelData;
         await supabase.from('levels').insert([{
-          name: levelData.name,
-          creator: levelData.creator,
-          gddl_rank: levelData.gddl_rank,
-          points: levelData.points,
-          rank: newRankData.rank,
-          judah: levelData.judah,
-          whitman: levelData.whitman,
-          jack: levelData.jack,
-          judah_locked: levelData.judah_locked,
-          whitman_locked: levelData.whitman_locked,
-          jack_locked: levelData.jack_locked
+          ...levelWithoutId,
+          rank: newRankData.rank
         }]);
         
         // Delete from extended_levels
