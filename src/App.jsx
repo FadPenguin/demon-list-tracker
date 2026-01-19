@@ -6,11 +6,6 @@ const DemonListTracker = () => {
   const [levels, setLevels] = useState([]);
   const [extendedList, setExtendedList] = useState([]);
   const [currentView, setCurrentView] = useState('main');
-  const [bankedPoints, setBankedPoints] = useState({
-    judah: 0,
-    whitman: 0,
-    jack: 0
-  });
   const [editingCell, setEditingCell] = useState(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newLevelData, setNewLevelData] = useState({
@@ -34,10 +29,6 @@ const DemonListTracker = () => {
       )
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'extended_levels' },
-        () => loadData()
-      )
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'banked_points' },
         () => loadData()
       )
       .subscribe();
@@ -79,38 +70,11 @@ const DemonListTracker = () => {
     setExtendedList(data || []);
   };
 
-  const loadBankedPoints = async () => {
-    const { data, error } = await supabase
-      .from('banked_points')
-      .select('*')
-      .single();
-    
-    if (error && error.code !== 'PGRST116') {
-      console.error('Error loading banked points:', error);
-      return;
-    }
-    
-    if (data) {
-      setBankedPoints({
-        judah: data.judah || 0,
-        whitman: data.whitman || 0,
-        jack: data.jack || 0
-      });
-    } else {
-      await supabase.from('banked_points').insert({
-        judah: 0,
-        whitman: 0,
-        jack: 0
-      });
-    }
-  };
-
   const loadData = async () => {
     setLoading(true);
     await Promise.all([
       loadLevels(),
-      loadExtendedLevels(),
-      loadBankedPoints()
+      loadExtendedLevels()
     ]);
     setLoading(false);
   };
@@ -164,8 +128,16 @@ const DemonListTracker = () => {
     }));
   };
 
-  const calculateTotal = (player, includeExtended = false) => {
-    const listToUse = includeExtended ? [...levels, ...extendedList] : levels;
+  const calculateTotal = (player, listType = 'both') => {
+    let listToUse = [];
+    if (listType === 'main') {
+      listToUse = levels;
+    } else if (listType === 'extended') {
+      listToUse = extendedList;
+    } else {
+      listToUse = [...levels, ...extendedList];
+    }
+    
     const currentPoints = listToUse.reduce((sum, level) => {
       const lockedPoints = level[`${player}_locked`];
       if (lockedPoints !== null) {
@@ -184,7 +156,7 @@ const DemonListTracker = () => {
       }
     }, 0);
     
-    return currentPoints + (bankedPoints[player] || 0);
+    return currentPoints;
   };
 
   const handleProgressChange = (levelId, player, value, isExtended = false) => {
@@ -227,23 +199,6 @@ const DemonListTracker = () => {
       console.error('Error updating progress:', error);
     } else {
       console.log('Successfully saved:', data);
-    }
-    setSaving(false);
-  };
-
-  const handleBankedPointsChange = async (player, value) => {
-    const numValue = value === '' ? 0 : Math.max(0, parseFloat(value) || 0);
-    
-    setSaving(true);
-    const { error } = await supabase
-      .from('banked_points')
-      .update({ [player]: numValue })
-      .eq('id', 1);
-
-    if (error) {
-      console.error('Error updating banked points:', error);
-    } else {
-      setBankedPoints(prev => ({ ...prev, [player]: numValue }));
     }
     setSaving(false);
   };
@@ -311,8 +266,6 @@ const DemonListTracker = () => {
       console.log('Inserted new level:', insertedLevel.name, 'at rank', newLevelRank);
 
       // Step 6: Handle levels that need to move FROM main TO extended
-      let pointsToBank = { judah: 0, whitman: 0, jack: 0 };
-      
       for (const level of allCurrentLevels) {
         // Currently in main list
         const currentlyInMain = freshMainLevels.find(l => l.id === level.id);
@@ -322,16 +275,6 @@ const DemonListTracker = () => {
         if (!top25Ids.includes(level.id)) {
           console.log(`Level "${level.name}" needs to move from main to extended`);
           console.log('  Current progress:', { judah: level.judah, whitman: level.whitman, jack: level.jack });
-          
-          // Calculate points to bank
-          ['judah', 'whitman', 'jack'].forEach(player => {
-            const progress = level[player] || 0;
-            if (progress === 100) {
-              pointsToBank[player] += level.points;
-            } else if (progress > 0) {
-              pointsToBank[player] += progress / 100;
-            }
-          });
           
           // Get new rank in extended list
           const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
@@ -357,26 +300,6 @@ const DemonListTracker = () => {
           console.log(`  Moved to extended at rank ${newRank}, preserved progress`);
         }
       }
-
-      // Step 7: Bank the points
-      if (pointsToBank.judah > 0 || pointsToBank.whitman > 0 || pointsToBank.jack > 0) {
-        console.log('Banking points:', pointsToBank);
-        const { data: currentBanked } = await supabase
-          .from('banked_points')
-          .select('*')
-          .single();
-
-        await supabase
-          .from('banked_points')
-          .update({
-            judah: (currentBanked?.judah || 0) + pointsToBank.judah,
-            whitman: (currentBanked?.whitman || 0) + pointsToBank.whitman,
-            jack: (currentBanked?.jack || 0) + pointsToBank.jack
-          })
-          .eq('id', 1);
-      }
-
-      // Step 8: Handle levels that need to move FROM extended TO main
       for (const level of allCurrentLevels) {
         // Currently in extended list
         const currentlyInExtended = freshExtendedLevels.find(l => l.id === level.id);
@@ -542,52 +465,61 @@ const DemonListTracker = () => {
           {!isExtended && (
             <tfoot className="bg-purple-600/40">
               <tr>
-                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right">
-                  Banked Points:
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
+                  Main List Points:
                 </td>
-                {['judah', 'whitman', 'jack'].map(player => (
-                  <td key={player} className="px-4 py-4 text-center">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={bankedPoints[player] || 0}
-                      onChange={(e) => handleBankedPointsChange(player, e.target.value)}
-                      className="w-20 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center font-bold focus:ring-2 focus:ring-purple-500"
-                    />
-                  </td>
-                ))}
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', 'main').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', 'main').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', 'main').toFixed(2)}</td>
                 <td></td>
               </tr>
               <tr>
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
-                  Main List Total:
+                  Extended List Points:
                 </td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', false).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', false).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', false).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('judah', 'extended').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('whitman', 'extended').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('jack', 'extended').toFixed(2)}</td>
                 <td></td>
               </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
                   TOTAL POINTS (All Lists):
                 </td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('judah', true).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('whitman', true).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('jack', true).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('judah', 'both').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('whitman', 'both').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('jack', 'both').toFixed(2)}</td>
                 <td></td>
               </tr>
             </tfoot>
           )}
           {isExtended && (
             <tfoot className="bg-purple-600/40">
+              <tr>
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
+                  Main List Points:
+                </td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', 'main').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', 'main').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', 'main').toFixed(2)}</td>
+                <td></td>
+              </tr>
+              <tr>
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
+                  Extended List Points:
+                </td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('judah', 'extended').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('whitman', 'extended').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-blue-300 font-bold text-2xl">{calculateTotal('jack', 'extended').toFixed(2)}</td>
+                <td></td>
+              </tr>
               <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
                 <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
                   TOTAL POINTS (All Lists):
                 </td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('judah', true).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('whitman', true).toFixed(2)}</td>
-                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('jack', true).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('judah', 'both').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('whitman', 'both').toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl font-bold">{calculateTotal('jack', 'both').toFixed(2)}</td>
                 <td></td>
               </tr>
             </tfoot>
