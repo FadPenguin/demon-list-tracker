@@ -25,20 +25,20 @@ const DemonListTracker = () => {
   useEffect(() => {
     loadData();
     
-    // Subscribe to real-time changes
+    // Subscribe to real-time changes - single reload for all changes
     const levelsChannel = supabase
       .channel('levels-changes')
       .on('postgres_changes', 
         { event: '*', schema: 'public', table: 'levels' },
-        () => loadLevels()
+        () => loadData()
       )
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'extended_levels' },
-        () => loadExtendedLevels()
+        () => loadData()
       )
       .on('postgres_changes',
         { event: '*', schema: 'public', table: 'banked_points' },
-        () => loadBankedPoints()
+        () => loadData()
       )
       .subscribe();
 
@@ -173,77 +173,66 @@ const DemonListTracker = () => {
       }
       
       const progress = level[player];
-      if (progress === 100) {
-        return sum + level.points;
-      } else if (progress > 0) {
-        return sum + (progress / 100);
-      }
-      return sum;
+      if (!progress || progress === 0) return sum;
+      
+      const percentage = progress / 100;
+      const earnedPoints = level.points * percentage;
+      return sum + earnedPoints;
     }, 0);
-    return currentPoints + bankedPoints[player];
+    
+    return currentPoints + (bankedPoints[player] || 0);
   };
 
-const updateProgress = async (id, player, value, isExtended = false) => {
-    const numValue = Math.max(0, Math.min(100, Number(value) || 0));
+  const handleProgressChange = async (levelId, player, value, isExtended = false) => {
+    const numValue = value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(value) || 0));
     const table = isExtended ? 'extended_levels' : 'levels';
-    
-    const updates = { [player]: numValue };
+    const listSetter = isExtended ? setExtendedList : setLevels;
+    const currentList = isExtended ? extendedList : levels;
+
+    const levelToUpdate = currentList.find(l => l.id === levelId);
+    if (!levelToUpdate) return;
+
+    const shouldLock = numValue === 100;
+    const lockedPoints = shouldLock ? levelToUpdate.points : null;
+
+    setSaving(true);
+    const updateData = {
+      [player]: numValue,
+      [`${player}_locked`]: lockedPoints
+    };
 
     const { error } = await supabase
       .from(table)
-      .update(updates)
-      .eq('id', id);
+      .update(updateData)
+      .eq('id', levelId);
 
     if (error) {
       console.error('Error updating progress:', error);
-      alert('Failed to update progress. Please try again.');
+    } else {
+      listSetter(currentList.map(level => 
+        level.id === levelId 
+          ? { ...level, ...updateData }
+          : level
+      ));
     }
+    setSaving(false);
   };
 
-  const updateCell = async (id, field, value, isExtended = false) => {
-    const table = isExtended ? 'extended_levels' : 'levels';
+  const handleBankedPointsChange = async (player, value) => {
+    const numValue = value === '' ? 0 : Math.max(0, parseFloat(value) || 0);
     
-    if (field === 'gddl_rank') {
-      // Get all levels from both tables
-      const { data: mainData } = await supabase.from('levels').select('*');
-      const { data: extData } = await supabase.from('extended_levels').select('*');
-      
-      const allLevels = [...(mainData || []), ...(extData || [])].map(level =>
-        level.id === id ? { ...level, gddl_rank: value } : level
-      );
-      
-      const sortedAll = sortAndRankLevels(allLevels);
-      const top25 = sortedAll.slice(0, 25);
-      const overflow = sortedAll.slice(25);
-      
-      // Clear both tables
-      await supabase.from('levels').delete().neq('id', 0);
-      await supabase.from('extended_levels').delete().neq('id', 0);
-      
-      // Insert sorted data
-      if (top25.length > 0) {
-        await supabase.from('levels').insert(top25.map(({ id, ...rest }) => rest));
-      }
-      if (overflow.length > 0) {
-        await supabase.from('extended_levels').insert(overflow.map(({ id, ...rest }) => rest));
-      }
-      
-      await loadData();
-    } else {
-      const dbField = field === 'gddlRank' ? 'gddl_rank' : field;
-      
-      const { error } = await supabase
-        .from(table)
-        .update({ [dbField]: value })
-        .eq('id', id);
+    setSaving(true);
+    const { error } = await supabase
+      .from('banked_points')
+      .update({ [player]: numValue })
+      .eq('id', 1);
 
-      if (error) {
-        console.error('Error updating cell:', error);
-        alert('Failed to update. Please try again.');
-      }
+    if (error) {
+      console.error('Error updating banked points:', error);
+    } else {
+      setBankedPoints(prev => ({ ...prev, [player]: numValue }));
     }
-    
-    setEditingCell(null);
+    setSaving(false);
   };
 
   const addLevel = async () => {
@@ -252,269 +241,195 @@ const updateProgress = async (id, player, value, isExtended = false) => {
       return;
     }
 
+    const gddlRank = parseFloat(newLevelData.gddlRank);
+    const points = parseInt(newLevelData.points);
+    
+    const isMainList = gddlRank >= 12.93;
+    const table = isMainList ? 'levels' : 'extended_levels';
+    const currentList = isMainList ? levels : extendedList;
+    const listSetter = isMainList ? setLevels : setExtendedList;
+
     const newLevel = {
-      rank: 0,
       name: newLevelData.name,
       creator: newLevelData.creator,
-      gddl_rank: Number(newLevelData.gddlRank),
-      points: Number(newLevelData.points),
+      gddl_rank: gddlRank,
+      points: points,
       judah: 0,
       whitman: 0,
       jack: 0,
       judah_locked: null,
       whitman_locked: null,
-      jack_locked: null
+      jack_locked: null,
+      rank: 0
     };
-    
-    // Get all levels
-    const { data: mainData } = await supabase.from('levels').select('*');
-    const { data: extData } = await supabase.from('extended_levels').select('*');
-    
-    const allLevels = [...(mainData || []), ...(extData || []), newLevel];
-    const sortedAll = sortAndRankLevels(allLevels);
-    const top25 = sortedAll.slice(0, 25);
-    const overflow = sortedAll.slice(25);
-    
-    // Clear both tables
-    await supabase.from('levels').delete().neq('id', 0);
-    await supabase.from('extended_levels').delete().neq('id', 0);
-    
-    // Insert sorted data
-    if (top25.length > 0) {
-      await supabase.from('levels').insert(top25.map(({ id, ...rest }) => rest));
+
+    setSaving(true);
+    const { data, error } = await supabase
+      .from(table)
+      .insert([newLevel])
+      .select();
+
+    if (error) {
+      console.error('Error adding level:', error);
+      alert('Error adding level. Please try again.');
+    } else {
+      const updatedList = sortAndRankLevels([...currentList, data[0]]);
+      
+      for (const level of updatedList) {
+        await supabase
+          .from(table)
+          .update({ rank: level.rank })
+          .eq('id', level.id);
+      }
+      
+      listSetter(updatedList);
+      setShowAddModal(false);
+      setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
     }
-    if (overflow.length > 0) {
-      await supabase.from('extended_levels').insert(overflow.map(({ id, ...rest }) => rest));
-    }
-    
-    await loadData();
-    setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
-    setShowAddModal(false);
+    setSaving(false);
   };
 
-  const deleteLevel = async (id, isExtended = false) => {
-    const table = isExtended ? 'extended_levels' : 'levels';
-    const listToDelete = isExtended ? extendedList : levels;
-    const levelToDelete = listToDelete.find(level => level.id === id);
-    
-    const newBankedPoints = { ...bankedPoints };
-    ['judah', 'whitman', 'jack'].forEach(player => {
-      const lockedPoints = levelToDelete[`${player}_locked`];
-      if (lockedPoints !== null) {
-        newBankedPoints[player] += lockedPoints;
-      } else {
-        const progress = levelToDelete[player];
-        if (progress === 100) {
-          newBankedPoints[player] += levelToDelete.points;
-        } else if (progress > 0) {
-          newBankedPoints[player] += (progress / 100);
-        }
-      }
-    });
-    
-    // Update banked points
-    await supabase
-      .from('banked_points')
-      .update(newBankedPoints)
-      .eq('id', 1);
+  const deleteLevel = async (levelId, isExtended = false) => {
+    if (!window.confirm('Are you sure you want to delete this level?')) {
+      return;
+    }
 
-    // Delete the level
-    await supabase
+    const table = isExtended ? 'extended_levels' : 'levels';
+    const listSetter = isExtended ? setExtendedList : setLevels;
+    const currentList = isExtended ? extendedList : levels;
+
+    setSaving(true);
+    const { error } = await supabase
       .from(table)
       .delete()
-      .eq('id', id);
-    
-    await loadData();
-  };
+      .eq('id', levelId);
 
-  const promoteFromExtended = async (id) => {
-    const levelToPromote = extendedList.find(level => level.id === id);
-    if (!levelToPromote) return;
-    
-    // Get all levels
-    const { data: mainData } = await supabase.from('levels').select('*');
-    const { data: extData } = await supabase.from('extended_levels').select('*');
-    
-    const allLevels = [...(mainData || []), levelToPromote];
-    const sortedAll = sortAndRankLevels(allLevels);
-    const top25 = sortedAll.slice(0, 25);
-    const overflow = sortedAll.slice(25);
-    
-    // Clear both tables
-    await supabase.from('levels').delete().neq('id', 0);
-    await supabase.from('extended_levels').delete().neq('id', 0);
-    
-    // Insert sorted data
-    if (top25.length > 0) {
-      await supabase.from('levels').insert(top25.map(({ id, ...rest }) => rest));
-    }
-    if (overflow.length > 0) {
-      await supabase.from('extended_levels').insert(overflow.map(({ id, ...rest }) => rest));
-    }
-    
-    await loadData();
-  };
-
-  const renderCell = (level, field, isExtended = false) => {
-    const dbField = field === 'gddlRank' ? 'gddl_rank' : field;
-    const displayValue = level[dbField];
-    
-    if (editingCell?.id === level.id && editingCell?.field === field) {
-      return (
-        <input
-          type={field === 'gddlRank' || field === 'points' ? 'number' : 'text'}
-          step={field === 'gddlRank' ? '0.01' : '1'}
-          className="w-full px-2 py-1 border border-blue-500 rounded"
-          defaultValue={displayValue}
-          autoFocus
-          onBlur={(e) => updateCell(level.id, field, field === 'gddlRank' || field === 'points' ? Number(e.target.value) : e.target.value, isExtended)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              updateCell(level.id, field, field === 'gddlRank' || field === 'points' ? Number(e.target.value) : e.target.value, isExtended);
-            }
-          }}
-        />
-      );
-    }
-    return (
-      <div
-        className="cursor-pointer hover:bg-gray-100 px-2 py-1 rounded"
-        onClick={() => setEditingCell({ id: level.id, field })}
-      >
-        {field === 'gddlRank' ? displayValue.toFixed(2) : displayValue}
-      </div>
-    );
-  };
-
-  const renderProgressCell = (level, player, isExtended = false) => {
-    const progress = level[player];
-    const lockedPoints = level[`${player}_locked`];
-    
-    let earnedPoints;
-    if (lockedPoints !== null) {
-      earnedPoints = lockedPoints;
-    } else if (progress === 100) {
-      earnedPoints = level.points;
-    } else if (progress > 0) {
-      earnedPoints = progress / 100;
+    if (error) {
+      console.error('Error deleting level:', error);
+      alert('Error deleting level. Please try again.');
     } else {
-      earnedPoints = 0;
+      const updatedList = sortAndRankLevels(currentList.filter(l => l.id !== levelId));
+      
+      for (const level of updatedList) {
+        await supabase
+          .from(table)
+          .update({ rank: level.rank })
+          .eq('id', level.id);
+      }
+      
+      listSetter(updatedList);
     }
-    
-    const isLocked = lockedPoints !== null;
-    
-    return (
-      <div className="flex flex-col items-center gap-1">
-        <input
-          type="number"
-          min="0"
-          max="100"
-          value={progress}
-          onChange={(e) => updateProgress(level.id, player, e.target.value, isExtended)}
-          className={`w-16 px-2 py-1 text-center border rounded ${
-            isLocked
-              ? 'bg-blue-100 border-blue-500 font-bold' 
-              : progress === 100 
-              ? 'bg-green-100 border-green-500 font-bold' 
-              : progress > 0 
-              ? 'bg-yellow-50 border-yellow-400'
-              : 'bg-white border-gray-300'
-          }`}
-        />
-        <span className={`text-xs font-semibold ${
-          isLocked
-            ? 'text-blue-600'
-            : progress === 100 
-            ? 'text-green-600' 
-            : progress > 0 
-            ? 'text-yellow-600'
-            : 'text-gray-400'
-        }`}>
-          {earnedPoints > 0 ? `+${earnedPoints.toFixed(2)}${isLocked ? ' 🔒' : ''}` : '—'}
-        </span>
-      </div>
-    );
+    setSaving(false);
   };
 
   const renderTable = (levelList, isExtended = false) => (
-    <div className="bg-white rounded-lg shadow-xl overflow-hidden">
+    <div className="bg-white/10 backdrop-blur-md rounded-lg shadow-2xl overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
-          <thead className="bg-gradient-to-r from-purple-600 to-blue-600 text-white">
+          <thead className="bg-purple-600/30">
             <tr>
-              <th className="px-4 py-3 text-left font-semibold">Rank</th>
-              <th className="px-4 py-3 text-left font-semibold">Level Name</th>
-              <th className="px-4 py-3 text-left font-semibold">Creator</th>
-              <th className="px-4 py-3 text-left font-semibold">GDDL Rank</th>
-              <th className="px-4 py-3 text-left font-semibold">Points</th>
-              <th className="px-4 py-3 text-center font-semibold">Judah %</th>
-              <th className="px-4 py-3 text-center font-semibold">Whitman %</th>
-              <th className="px-4 py-3 text-center font-semibold">Jack %</th>
-              <th className="px-4 py-3 text-center font-semibold"></th>
+              <th className="px-4 py-4 text-left text-white font-bold">Rank</th>
+              <th className="px-4 py-4 text-left text-white font-bold">Level</th>
+              <th className="px-4 py-4 text-left text-white font-bold">Creator</th>
+              <th className="px-4 py-4 text-center text-white font-bold">GDDL Rank</th>
+              <th className="px-4 py-4 text-center text-white font-bold">Points</th>
+              <th className="px-4 py-4 text-center text-white font-bold">Judah</th>
+              <th className="px-4 py-4 text-center text-white font-bold">Whitman</th>
+              <th className="px-4 py-4 text-center text-white font-bold">Jack</th>
+              <th className="px-4 py-4 text-center text-white font-bold">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {levelList.map((level, index) => (
-              <tr key={level.id} className={index % 2 === 0 ? 'bg-gray-50' : 'bg-white'}>
-                <td className="px-4 py-3 font-bold text-purple-600">#{level.rank}</td>
-                <td className="px-4 py-3">{renderCell(level, 'name', isExtended)}</td>
-                <td className="px-4 py-3">{renderCell(level, 'creator', isExtended)}</td>
-                <td className="px-4 py-3">{renderCell(level, 'gddlRank', isExtended)}</td>
-                <td className="px-4 py-3 font-semibold text-blue-600">{renderCell(level, 'points', isExtended)}</td>
-                <td className="px-4 py-3 text-center">{renderProgressCell(level, 'judah', isExtended)}</td>
-                <td className="px-4 py-3 text-center">{renderProgressCell(level, 'whitman', isExtended)}</td>
-                <td className="px-4 py-3 text-center">{renderProgressCell(level, 'jack', isExtended)}</td>
-                <td className="px-4 py-3 text-center flex gap-2 justify-center">
-                  {isExtended && (
-                    <button
-                      onClick={() => promoteFromExtended(level.id)}
-                      className="text-green-500 hover:text-green-700 transition-colors"
-                      title="Promote to main list"
-                    >
-                      ↑
-                    </button>
-                  )}
+            {levelList.map((level) => (
+              <tr key={level.id} className="border-b border-white/10 hover:bg-white/5 transition-colors">
+                <td className="px-4 py-3 text-white font-semibold">#{level.rank}</td>
+                <td className="px-4 py-3 text-white font-semibold">{level.name}</td>
+                <td className="px-4 py-3 text-blue-200">{level.creator}</td>
+                <td className="px-4 py-3 text-center text-yellow-300">{level.gddl_rank.toFixed(2)}</td>
+                <td className="px-4 py-3 text-center text-green-300 font-bold">{level.points}</td>
+                
+                {['judah', 'whitman', 'jack'].map(player => (
+                  <td key={player} className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-2">
+                      {level[`${player}_locked`] !== null ? (
+                        <div className="flex items-center gap-1 text-green-400 font-bold">
+                          <span>🔒 {level[`${player}_locked`]}</span>
+                        </div>
+                      ) : (
+                        <>
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            value={level[player] || 0}
+                            onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
+                            className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                          />
+                          <span className="text-white/70 text-sm">%</span>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                ))}
+                
+                <td className="px-4 py-3 text-center">
                   <button
                     onClick={() => deleteLevel(level.id, isExtended)}
-                    className="text-red-500 hover:text-red-700 transition-colors"
-                    title="Remove from list (points will be banked)"
+                    className="bg-red-500/20 hover:bg-red-500/40 text-red-300 p-2 rounded transition-all"
+                    title="Delete level"
                   >
-                    <X size={18} />
+                    <X size={16} />
                   </button>
                 </td>
               </tr>
             ))}
           </tbody>
           {!isExtended && (
-            <tfoot className="bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold">
+            <tfoot className="bg-purple-600/40">
               <tr>
-                <td colSpan="5" className="px-4 py-3 text-right text-lg">Current List Points:</td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {(calculateTotal('judah') - bankedPoints.judah).toFixed(2)}
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right">
+                  Banked Points:
                 </td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {(calculateTotal('whitman') - bankedPoints.whitman).toFixed(2)}
-                </td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {(calculateTotal('jack') - bankedPoints.jack).toFixed(2)}
-                </td>
+                {['judah', 'whitman', 'jack'].map(player => (
+                  <td key={player} className="px-4 py-4 text-center">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={bankedPoints[player] || 0}
+                      onChange={(e) => handleBankedPointsChange(player, e.target.value)}
+                      className="w-20 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center font-bold focus:ring-2 focus:ring-purple-500"
+                    />
+                  </td>
+                ))}
                 <td></td>
               </tr>
               <tr>
-                <td colSpan="5" className="px-4 py-3 text-right text-lg">Banked Points:</td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {bankedPoints.judah.toFixed(2)}
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-xl">
+                  Main List Total:
                 </td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {bankedPoints.whitman.toFixed(2)}
-                </td>
-                <td className="px-4 py-3 text-center text-lg">
-                  {bankedPoints.jack.toFixed(2)}
-                </td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('judah', false).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('whitman', false).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-green-300 font-bold text-2xl">{calculateTotal('jack', false).toFixed(2)}</td>
                 <td></td>
               </tr>
-              <tr className="border-t-2 border-white/30">
-                <td colSpan="5" className="px-4 py-4 text-right text-xl">Total Points:</td>
+              <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
+                  TOTAL POINTS (All Lists):
+                </td>
+                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('judah', true).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('whitman', true).toFixed(2)}</td>
+                <td className="px-4 py-4 text-center text-2xl">{calculateTotal('jack', true).toFixed(2)}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          )}
+          {isExtended && (
+            <tfoot className="bg-purple-600/40">
+              <tr className="bg-gradient-to-r from-purple-600/50 to-blue-600/50">
+                <td colSpan="5" className="px-4 py-4 text-white font-bold text-right text-2xl">
+                  TOTAL POINTS (All Lists):
+                </td>
                 <td className="px-4 py-4 text-center text-2xl">{calculateTotal('judah', true).toFixed(2)}</td>
                 <td className="px-4 py-4 text-center text-2xl">{calculateTotal('whitman', true).toFixed(2)}</td>
                 <td className="px-4 py-4 text-center text-2xl">{calculateTotal('jack', true).toFixed(2)}</td>
