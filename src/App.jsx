@@ -312,6 +312,11 @@ const DemonListTracker = () => {
         const isInExtended = extendedList.find(l => l.id === level.id);
         const currentTable = isInMain ? 'levels' : isInExtended ? 'extended_levels' : targetTable;
         
+        // Log what we're updating
+        if (level.id !== insertedLevel.id) {
+          console.log(`Updating rank for ${level.name} in ${currentTable}, old rank: ${level.rank}, new rank: ${newRank}, progress: j=${level.judah} w=${level.whitman} k=${level.jack}`);
+        }
+        
         // Update rank
         if (level.id !== insertedLevel.id) { // Don't update the one we just inserted
           await supabase
@@ -344,7 +349,7 @@ const DemonListTracker = () => {
 
           const newRank = beyond25After.findIndex(l => l.id === level.id) + 26;
           
-          // Copy to extended_levels - explicitly list all fields to preserve
+          // Copy to extended_levels - RESET progress to 0 since we're banking the points
           const { error: copyError } = await supabase
             .from('extended_levels')
             .insert([{
@@ -353,12 +358,12 @@ const DemonListTracker = () => {
               gddl_rank: level.gddl_rank,
               points: level.points,
               rank: newRank,
-              judah: level.judah,
-              whitman: level.whitman,
-              jack: level.jack,
-              judah_locked: level.judah_locked,
-              whitman_locked: level.whitman_locked,
-              jack_locked: level.jack_locked
+              judah: 0,
+              whitman: 0,
+              jack: 0,
+              judah_locked: null,
+              whitman_locked: null,
+              jack_locked: null
             }]);
           
           if (copyError) {
