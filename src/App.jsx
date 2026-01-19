@@ -430,6 +430,65 @@ const DemonListTracker = () => {
     setSaving(false);
   };
 
+  const removePlayer = async () => {
+    if (players.length <= 1) {
+      alert('Cannot remove the last player!');
+      return;
+    }
+    
+    const playerName = prompt(`Enter player name to remove:\n\nAvailable players: ${players.join(', ')}`);
+    if (!playerName || playerName.trim() === '') return;
+    
+    const sanitizedName = playerName.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+    
+    if (!players.includes(sanitizedName)) {
+      alert('Player not found!');
+      return;
+    }
+    
+    if (!confirm(`Are you sure you want to remove player "${sanitizedName}"? This will delete all their progress data permanently!`)) {
+      return;
+    }
+    
+    setSaving(true);
+    
+    try {
+      // Remove columns from levels table using raw SQL
+      const { error: levelsError } = await supabase.rpc('exec_sql', {
+        sql_query: `
+          ALTER TABLE levels 
+          DROP COLUMN IF EXISTS ${sanitizedName},
+          DROP COLUMN IF EXISTS ${sanitizedName}_locked;
+        `
+      });
+      
+      if (levelsError) throw levelsError;
+      
+      // Remove columns from extended_levels table using raw SQL
+      const { error: extendedError } = await supabase.rpc('exec_sql', {
+        sql_query: `
+          ALTER TABLE extended_levels 
+          DROP COLUMN IF EXISTS ${sanitizedName},
+          DROP COLUMN IF EXISTS ${sanitizedName}_locked;
+        `
+      });
+      
+      if (extendedError) throw extendedError;
+      
+      // Remove from players list
+      setPlayers(players.filter(p => p !== sanitizedName));
+      alert(`Successfully removed player: ${playerName}`);
+      
+      // Reload data
+      await loadData();
+    } catch (error) {
+      console.error('Error removing player:', error);
+      alert('Error removing player: ' + error.message);
+    }
+    
+    setSaving(false);
+  };
+
   const deleteLevel = async (levelId, isExtended = false) => {
     if (!window.confirm('Are you sure you want to delete this level?')) {
       return;
@@ -752,6 +811,13 @@ const DemonListTracker = () => {
           >
             <Plus size={20} />
             Add Player
+          </button>
+          <button
+            onClick={removePlayer}
+            className="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-red-700 hover:to-pink-700 transition-all shadow-lg flex items-center gap-2"
+          >
+            <X size={20} />
+            Remove Player
           </button>
         </div>
 
