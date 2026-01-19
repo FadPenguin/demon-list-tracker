@@ -21,6 +21,7 @@ const DemonListTracker = () => {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [updateTimers, setUpdateTimers] = useState({});
 
   useEffect(() => {
     loadData();
@@ -175,9 +176,13 @@ const DemonListTracker = () => {
       const progress = level[player];
       if (!progress || progress === 0) return sum;
       
-      // Award fractional points: progress% of 1 point
-      const earnedPoints = progress / 100;
-      return sum + earnedPoints;
+      // If 100%, award full level points. Otherwise award fractional points
+      if (progress === 100) {
+        return sum + level.points;
+      } else {
+        const earnedPoints = progress / 100;
+        return sum + earnedPoints;
+      }
     }, 0);
     
     return currentPoints + (bankedPoints[player] || 0);
@@ -192,30 +197,38 @@ const DemonListTracker = () => {
     const levelToUpdate = currentList.find(l => l.id === levelId);
     if (!levelToUpdate) return;
 
-    const shouldLock = numValue === 100;
-    const lockedPoints = shouldLock ? 1 : null;
-
-    setSaving(true);
+    // Update UI immediately
     const updateData = {
       [player]: numValue,
-      [`${player}_locked`]: lockedPoints
+      [`${player}_locked`]: null // Never lock
     };
 
-    const { error } = await supabase
-      .from(table)
-      .update(updateData)
-      .eq('id', levelId);
+    listSetter(currentList.map(level => 
+      level.id === levelId 
+        ? { ...level, ...updateData }
+        : level
+    ));
 
-    if (error) {
-      console.error('Error updating progress:', error);
-    } else {
-      listSetter(currentList.map(level => 
-        level.id === levelId 
-          ? { ...level, ...updateData }
-          : level
-      ));
+    // Debounce database save
+    const timerKey = `${levelId}-${player}`;
+    if (updateTimers[timerKey]) {
+      clearTimeout(updateTimers[timerKey]);
     }
-    setSaving(false);
+
+    const timer = setTimeout(async () => {
+      setSaving(true);
+      const { error } = await supabase
+        .from(table)
+        .update(updateData)
+        .eq('id', levelId);
+
+      if (error) {
+        console.error('Error updating progress:', error);
+      }
+      setSaving(false);
+    }, 500); // Wait 500ms after last keystroke
+
+    setUpdateTimers(prev => ({ ...prev, [timerKey]: timer }));
   };
 
   const handleBankedPointsChange = async (player, value) => {
@@ -440,22 +453,14 @@ const DemonListTracker = () => {
                 {['judah', 'whitman', 'jack'].map(player => (
                   <td key={player} className="px-4 py-3 text-center">
                     <div className="flex items-center justify-center gap-2">
-                      {level[`${player}_locked`] !== null ? (
-                        <div className="flex items-center gap-1 text-green-400 font-bold">
-                          <span>🔒 {level[`${player}_locked`]}</span>
-                        </div>
-                      ) : (
-                        <>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            value={level[player] || 0}
-                            onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
-                            className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          />
-                          <span className="text-white/70 text-sm">%</span>
-                        </>
-                      )}
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={level[player] || 0}
+                        onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
+                        className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                      />
+                      <span className="text-white/70 text-sm">%</span>
                     </div>
                   </td>
                 ))}
@@ -544,7 +549,7 @@ const DemonListTracker = () => {
         <div className="bg-white/10 backdrop-blur-md rounded-lg shadow-2xl p-6 mb-6">
           <div className="flex justify-between items-center mb-2">
             <h1 className="text-4xl font-bold text-white text-center flex-1">
-              Demon List
+              Demon List Tracker
             </h1>
             <button
               onClick={loadData}
@@ -554,7 +559,7 @@ const DemonListTracker = () => {
               <RefreshCw size={20} />
             </button>
           </div>
-          <p className="text-blue-200 text-center">Track your demon completions and progress</p>
+          <p className="text-blue-200 text-center">Track your extreme demon completions and progress</p>
           {saving && <p className="text-yellow-300 text-center text-sm mt-2">Saving changes...</p>}
           <p className="text-green-300 text-center text-sm mt-2">✓ Real-time syncing with Supabase</p>
           
@@ -684,6 +689,7 @@ const DemonListTracker = () => {
             <li>Higher GDDL rank = harder level (e.g., 25.56 is rank #1)</li>
             <li>Only the top 25 levels appear on the main list</li>
             <li>Enter progress as a percentage (0-100) for each player</li>
+            <li>100% completion awards the full level points, lower percentages award fractional points (e.g., 23% = 0.23 points)</li>
             <li>Total Points includes points from both Main and Extended lists</li>
           </ul>
         </div>
