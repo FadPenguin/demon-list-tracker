@@ -12,8 +12,7 @@ const DemonListTracker = () => {
   const [newLevelData, setNewLevelData] = useState({
     name: '',
     creator: '',
-    gddlRank: '',
-    points: ''
+    gddlRank: ''
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -138,6 +137,15 @@ const DemonListTracker = () => {
     }));
   };
 
+  const calculatePointsFromRank = (rank) => {
+    // Rank 1 = 25 points, Rank 2 = 24 points, ..., Rank 25 = 1 point
+    // Rank 26+ (extended list) = 0 points
+    if (rank <= 25) {
+      return 26 - rank;
+    }
+    return 0;
+  };
+
   const calculateTotal = (player, listType = 'both') => {
     let listToUse = [];
     if (listType === 'main') {
@@ -149,21 +157,25 @@ const DemonListTracker = () => {
     }
     
     const currentPoints = listToUse.reduce((sum, level) => {
+      const progress = level[player];
+      if (!progress || progress === 0) return sum;
+      
+      // If locked, use the locked value (points at time of completion)
       const lockedPoints = level[`${player}_locked`];
       if (lockedPoints !== null) {
         return sum + lockedPoints;
       }
       
-      const progress = level[player];
-      if (!progress || progress === 0) return sum;
-      
-      // If 100%, award full level points. Otherwise award fractional points
+      // If 100% but not locked yet, lock the current rank-based points
       if (progress === 100) {
-        return sum + level.points;
-      } else {
-        const earnedPoints = progress / 100;
-        return sum + earnedPoints;
+        const points = calculatePointsFromRank(level.rank);
+        return sum + points;
       }
+      
+      // Otherwise award fractional points based on current rank
+      const points = calculatePointsFromRank(level.rank);
+      const earnedPoints = (progress / 100) * points;
+      return sum + earnedPoints;
     }, 0);
     
     return currentPoints;
@@ -190,13 +202,21 @@ const DemonListTracker = () => {
   const saveProgress = async (levelId, player, value, isExtended = false) => {
     const numValue = value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(value) || 0));
     const table = isExtended ? 'extended_levels' : 'levels';
+    const currentList = isExtended ? extendedList : levels;
 
     console.log(`Saving progress: level ${levelId}, player ${player}, value ${numValue}, table ${table}`);
+
+    // Find the level to get its current rank
+    const level = currentList.find(l => l.id === levelId);
+    if (!level) {
+      console.error('Level not found');
+      return;
+    }
 
     setSaving(true);
     const updateData = {
       [player]: numValue,
-      [`${player}_locked`]: null
+      [`${player}_locked`]: numValue === 100 ? calculatePointsFromRank(level.rank) : null
     };
 
     const { data, error } = await supabase
@@ -214,13 +234,12 @@ const DemonListTracker = () => {
   };
 
   const addLevel = async () => {
-    if (!newLevelData.name || !newLevelData.creator || !newLevelData.gddlRank || !newLevelData.points) {
+    if (!newLevelData.name || !newLevelData.creator || !newLevelData.gddlRank) {
       alert('Please fill in all fields');
       return;
     }
 
     const gddlRank = parseFloat(newLevelData.gddlRank);
-    const points = parseInt(newLevelData.points);
 
     setSaving(true);
 
@@ -233,19 +252,18 @@ const DemonListTracker = () => {
       
       console.log('Fresh data loaded, total levels:', allCurrentLevels.length);
       
-      // Step 2: Create new level
+      // Step 2: Create new level (points will be calculated based on rank)
       const newLevel = {
         name: newLevelData.name,
         creator: newLevelData.creator,
-        gddl_rank: gddlRank,
-        points: points,
-        judah: 0,
-        whitman: 0,
-        jack: 0,
-        judah_locked: null,
-        whitman_locked: null,
-        jack_locked: null
+        gddl_rank: gddlRank
       };
+
+      // Add player progress fields
+      players.forEach(player => {
+        newLevel[player] = 0;
+        newLevel[`${player}_locked`] = null;
+      });
 
       // Step 3: Determine proper ranking with new level included
       const allWithNew = [...allCurrentLevels, newLevel].sort((a, b) => b.gddl_rank - a.gddl_rank);
@@ -256,6 +274,9 @@ const DemonListTracker = () => {
       ) + 1;
 
       console.log('New level will be rank:', newLevelRank);
+
+      // Calculate points for the new level based on its rank
+      const newLevelPoints = calculatePointsFromRank(newLevelRank);
 
       // Step 4: Determine final placement for all levels
       const top25Ids = allWithNew.slice(0, 25).map(l => l.id).filter(Boolean);
@@ -268,7 +289,7 @@ const DemonListTracker = () => {
       const newLevelTable = newLevelRank <= 25 ? 'levels' : 'extended_levels';
       const { data: insertedLevel, error: insertError } = await supabase
         .from(newLevelTable)
-        .insert([{ ...newLevel, rank: newLevelRank }])
+        .insert([{ ...newLevel, rank: newLevelRank, points: newLevelPoints }])
         .select()
         .single();
 
@@ -288,21 +309,24 @@ const DemonListTracker = () => {
           
           // Get new rank in extended list
           const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
+          const newPoints = calculatePointsFromRank(newRank);
           
           // Insert into extended_levels - PRESERVE all progress data
-          await supabase.from('extended_levels').insert([{
+          const insertData = {
             name: level.name,
             creator: level.creator,
             gddl_rank: level.gddl_rank,
-            points: level.points,
-            rank: newRank,
-            judah: level.judah,
-            whitman: level.whitman,
-            jack: level.jack,
-            judah_locked: level.judah_locked,
-            whitman_locked: level.whitman_locked,
-            jack_locked: level.jack_locked
-          }]);
+            points: newPoints,
+            rank: newRank
+          };
+          
+          // Add all player fields
+          players.forEach(player => {
+            insertData[player] = level[player] || 0;
+            insertData[`${player}_locked`] = level[`${player}_locked`];
+          });
+          
+          await supabase.from('extended_levels').insert([insertData]);
           
           // Delete from main
           await supabase.from('levels').delete().eq('id', level.id);
@@ -310,6 +334,8 @@ const DemonListTracker = () => {
           console.log(`  Moved to extended at rank ${newRank}, preserved progress`);
         }
       }
+
+      // Step 7: Handle levels that need to move FROM extended TO main
       for (const level of allCurrentLevels) {
         // Currently in extended list
         const currentlyInExtended = freshExtendedLevels.find(l => l.id === level.id);
@@ -321,21 +347,24 @@ const DemonListTracker = () => {
           
           // Get new rank in main list
           const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
+          const newPoints = calculatePointsFromRank(newRank);
           
           // Insert into levels - PRESERVE all progress data
-          await supabase.from('levels').insert([{
+          const insertData = {
             name: level.name,
             creator: level.creator,
             gddl_rank: level.gddl_rank,
-            points: level.points,
-            rank: newRank,
-            judah: level.judah,
-            whitman: level.whitman,
-            jack: level.jack,
-            judah_locked: level.judah_locked,
-            whitman_locked: level.whitman_locked,
-            jack_locked: level.jack_locked
-          }]);
+            points: newPoints,
+            rank: newRank
+          };
+          
+          // Add all player fields
+          players.forEach(player => {
+            insertData[player] = level[player] || 0;
+            insertData[`${player}_locked`] = level[`${player}_locked`];
+          });
+          
+          await supabase.from('levels').insert([insertData]);
           
           // Delete from extended
           await supabase.from('extended_levels').delete().eq('id', level.id);
@@ -344,33 +373,34 @@ const DemonListTracker = () => {
         }
       }
 
-      // Step 9: Update ranks for levels that stayed in their current table
+      // Step 8: Update ranks AND points for levels that stayed in their current table
       for (const level of allCurrentLevels) {
         const newRank = allWithNew.findIndex(l => l.id === level.id) + 1;
+        const newPoints = calculatePointsFromRank(newRank);
         const shouldBeInMain = top25Ids.includes(level.id);
         const currentlyInMain = freshMainLevels.find(l => l.id === level.id);
         const currentlyInExtended = freshExtendedLevels.find(l => l.id === level.id);
         
         // If staying in main
         if (shouldBeInMain && currentlyInMain) {
-          await supabase.from('levels').update({ rank: newRank }).eq('id', level.id);
-          console.log(`Updated rank for "${level.name}" in main list to ${newRank}`);
+          await supabase.from('levels').update({ rank: newRank, points: newPoints }).eq('id', level.id);
+          console.log(`Updated rank for "${level.name}" in main list to ${newRank} (${newPoints} pts)`);
         }
         
         // If staying in extended
         if (!shouldBeInMain && currentlyInExtended) {
-          await supabase.from('extended_levels').update({ rank: newRank }).eq('id', level.id);
-          console.log(`Updated rank for "${level.name}" in extended list to ${newRank}`);
+          await supabase.from('extended_levels').update({ rank: newRank, points: newPoints }).eq('id', level.id);
+          console.log(`Updated rank for "${level.name}" in extended list to ${newRank} (${newPoints} pts)`);
         }
       }
 
       console.log('All operations complete, reloading data');
 
-      // Step 10: Reload everything
+      // Step 9: Reload everything
       await loadData();
       
       setShowAddModal(false);
-      setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
+      setNewLevelData({ name: '', creator: '', gddlRank: '' });
     } catch (error) {
       console.error('Error adding level:', error);
       alert('Error adding level: ' + error.message);
@@ -378,6 +408,8 @@ const DemonListTracker = () => {
     
     setSaving(false);
   };
+
+  const addPlayer = async () => {
 
   const addPlayer = async () => {
     const playerName = prompt('Enter player name:');
@@ -761,19 +793,6 @@ const DemonListTracker = () => {
                     placeholder="e.g., 15.50"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Points
-                  </label>
-                  <input
-                    type="number"
-                    value={newLevelData.points}
-                    onChange={(e) => setNewLevelData({ ...newLevelData, points: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                    placeholder="e.g., 75"
-                  />
-                </div>
               </div>
 
               <div className="flex gap-4 mt-6">
@@ -786,7 +805,7 @@ const DemonListTracker = () => {
                 <button
                   onClick={() => {
                     setShowAddModal(false);
-                    setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
+                    setNewLevelData({ name: '', creator: '', gddlRank: '' });
                   }}
                   className="flex-1 bg-gray-300 text-gray-700 px-6 py-3 rounded-lg font-semibold hover:bg-gray-400 transition-all"
                 >
