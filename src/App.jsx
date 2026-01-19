@@ -21,7 +21,6 @@ const DemonListTracker = () => {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [updateTimers, setUpdateTimers] = useState({});
 
   useEffect(() => {
     loadData();
@@ -188,19 +187,15 @@ const DemonListTracker = () => {
     return currentPoints + (bankedPoints[player] || 0);
   };
 
-  const handleProgressChange = async (levelId, player, value, isExtended = false) => {
+  const handleProgressChange = (levelId, player, value, isExtended = false) => {
     const numValue = value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(value) || 0));
-    const table = isExtended ? 'extended_levels' : 'levels';
     const listSetter = isExtended ? setExtendedList : setLevels;
     const currentList = isExtended ? extendedList : levels;
 
-    const levelToUpdate = currentList.find(l => l.id === levelId);
-    if (!levelToUpdate) return;
-
-    // Update UI immediately
+    // Update UI immediately (local state only)
     const updateData = {
       [player]: numValue,
-      [`${player}_locked`]: null // Never lock
+      [`${player}_locked`]: null
     };
 
     listSetter(currentList.map(level => 
@@ -208,27 +203,27 @@ const DemonListTracker = () => {
         ? { ...level, ...updateData }
         : level
     ));
+  };
 
-    // Debounce database save
-    const timerKey = `${levelId}-${player}`;
-    if (updateTimers[timerKey]) {
-      clearTimeout(updateTimers[timerKey]);
+  const saveProgress = async (levelId, player, value, isExtended = false) => {
+    const numValue = value === '' ? 0 : Math.max(0, Math.min(100, parseFloat(value) || 0));
+    const table = isExtended ? 'extended_levels' : 'levels';
+
+    setSaving(true);
+    const updateData = {
+      [player]: numValue,
+      [`${player}_locked`]: null
+    };
+
+    const { error } = await supabase
+      .from(table)
+      .update(updateData)
+      .eq('id', levelId);
+
+    if (error) {
+      console.error('Error updating progress:', error);
     }
-
-    const timer = setTimeout(async () => {
-      setSaving(true);
-      const { error } = await supabase
-        .from(table)
-        .update(updateData)
-        .eq('id', levelId);
-
-      if (error) {
-        console.error('Error updating progress:', error);
-      }
-      setSaving(false);
-    }, 500); // Wait 500ms after last keystroke
-
-    setUpdateTimers(prev => ({ ...prev, [timerKey]: timer }));
+    setSaving(false);
   };
 
   const handleBankedPointsChange = async (player, value) => {
@@ -257,135 +252,133 @@ const DemonListTracker = () => {
     const gddlRank = parseFloat(newLevelData.gddlRank);
     const points = parseInt(newLevelData.points);
 
-    const newLevel = {
-      name: newLevelData.name,
-      creator: newLevelData.creator,
-      gddl_rank: gddlRank,
-      points: points,
-      judah: 0,
-      whitman: 0,
-      jack: 0,
-      judah_locked: null,
-      whitman_locked: null,
-      jack_locked: null,
-      rank: 0
-    };
-
     setSaving(true);
 
-    // Combine all levels (main + extended) to determine proper placement
-    const allLevels = [...levels, ...extendedList, newLevel];
-    const sortedLevels = allLevels.sort((a, b) => b.gddl_rank - a.gddl_rank);
-    
-    // Assign ranks based on sorted order
-    const rankedLevels = sortedLevels.map((level, index) => ({
-      ...level,
-      rank: index + 1
-    }));
-
-    // Split into main (top 25) and extended (26+)
-    const newMainList = rankedLevels.slice(0, 25);
-    const newExtendedList = rankedLevels.slice(25);
-
     try {
-      // Determine which table the new level should go into
-      const newLevelRank = rankedLevels.find(l => 
+      // Combine all existing levels
+      const allLevels = [...levels, ...extendedList];
+      
+      // Add the new level
+      const newLevel = {
+        name: newLevelData.name,
+        creator: newLevelData.creator,
+        gddl_rank: gddlRank,
+        points: points,
+        judah: 0,
+        whitman: 0,
+        jack: 0,
+        judah_locked: null,
+        whitman_locked: null,
+        jack_locked: null
+      };
+
+      // Sort all levels by GDDL rank (highest first)
+      const allLevelsWithNew = [...allLevels, newLevel].sort((a, b) => b.gddl_rank - a.gddl_rank);
+      
+      // Assign ranks 1, 2, 3, etc.
+      const rankedLevels = allLevelsWithNew.map((level, index) => ({
+        ...level,
+        rank: index + 1
+      }));
+
+      // Determine which table the new level belongs in
+      const newLevelWithRank = rankedLevels.find(l => 
         l.name === newLevel.name && 
-        l.gddl_rank === newLevel.gddl_rank
-      ).rank;
+        l.gddl_rank === newLevel.gddl_rank &&
+        !l.id // This is the new one without an ID
+      );
 
-      const targetTable = newLevelRank <= 25 ? 'levels' : 'extended_levels';
+      const targetTable = newLevelWithRank.rank <= 25 ? 'levels' : 'extended_levels';
 
-      // Insert the new level
-      const { data: insertedData, error: insertError } = await supabase
+      // Insert new level into appropriate table
+      const { data: insertedLevel, error: insertError } = await supabase
         .from(targetTable)
-        .insert([newLevel])
-        .select();
+        .insert([{
+          name: newLevelWithRank.name,
+          creator: newLevelWithRank.creator,
+          gddl_rank: newLevelWithRank.gddl_rank,
+          points: newLevelWithRank.points,
+          rank: newLevelWithRank.rank,
+          judah: 0,
+          whitman: 0,
+          jack: 0,
+          judah_locked: null,
+          whitman_locked: null,
+          jack_locked: null
+        }])
+        .select()
+        .single();
 
       if (insertError) throw insertError;
 
-      // Check if any levels need to be moved between tables
+      // Now handle any levels that need to move between tables
+      const top25 = rankedLevels.slice(0, 25);
+      const beyond25 = rankedLevels.slice(25);
+
+      // Find levels currently in 'levels' that should move to 'extended_levels'
       const currentMainIds = levels.map(l => l.id);
-      const currentExtendedIds = extendedList.map(l => l.id);
-      
-      // Find levels that need to move from main to extended
-      const levelsToMoveToExtended = levels.filter(level => 
-        !newMainList.find(ml => ml.id === level.id)
+      const shouldBeExtended = currentMainIds.filter(id => 
+        !top25.find(l => l.id === id)
       );
 
-      // Find levels that need to move from extended to main
-      const levelsToMoveToMain = extendedList.filter(level => 
-        newMainList.find(ml => ml.id === level.id)
+      // Find levels currently in 'extended_levels' that should move to 'levels'
+      const currentExtendedIds = extendedList.map(l => l.id);
+      const shouldBeMain = currentExtendedIds.filter(id => 
+        top25.find(l => l.id === id)
       );
 
       // Move levels from main to extended
-      for (const level of levelsToMoveToExtended) {
-        const newRank = rankedLevels.find(l => l.id === level.id)?.rank || level.rank;
+      for (const levelId of shouldBeExtended) {
+        const levelData = levels.find(l => l.id === levelId);
+        const newRankData = beyond25.find(l => l.id === levelId);
         
-        // Copy to extended_levels
-        const { error: copyError } = await supabase
-          .from('extended_levels')
-          .insert([{ ...level, rank: newRank }]);
+        // Insert into extended_levels
+        await supabase.from('extended_levels').insert([{
+          ...levelData,
+          rank: newRankData.rank
+        }]);
         
-        if (copyError) throw copyError;
-
         // Delete from levels
-        const { error: deleteError } = await supabase
-          .from('levels')
-          .delete()
-          .eq('id', level.id);
-        
-        if (deleteError) throw deleteError;
+        await supabase.from('levels').delete().eq('id', levelId);
       }
 
       // Move levels from extended to main
-      for (const level of levelsToMoveToMain) {
-        const newRank = rankedLevels.find(l => l.id === level.id)?.rank || level.rank;
+      for (const levelId of shouldBeMain) {
+        const levelData = extendedList.find(l => l.id === levelId);
+        const newRankData = top25.find(l => l.id === levelId);
         
-        // Copy to levels
-        const { error: copyError } = await supabase
-          .from('levels')
-          .insert([{ ...level, rank: newRank }]);
+        // Insert into levels
+        await supabase.from('levels').insert([{
+          ...levelData,
+          rank: newRankData.rank
+        }]);
         
-        if (copyError) throw copyError;
-
         // Delete from extended_levels
-        const { error: deleteError } = await supabase
-          .from('extended_levels')
-          .delete()
-          .eq('id', level.id);
-        
-        if (deleteError) throw deleteError;
+        await supabase.from('extended_levels').delete().eq('id', levelId);
       }
 
       // Update ranks for all levels in main list
-      for (const level of newMainList) {
-        if (level.id) { // Skip the new level without ID yet
-          await supabase
-            .from('levels')
-            .update({ rank: level.rank })
-            .eq('id', level.id);
+      for (const level of top25) {
+        if (level.id) {
+          await supabase.from('levels').update({ rank: level.rank }).eq('id', level.id);
         }
       }
 
       // Update ranks for all levels in extended list
-      for (const level of newExtendedList) {
-        if (level.id) { // Skip the new level without ID yet
-          await supabase
-            .from('extended_levels')
-            .update({ rank: level.rank })
-            .eq('id', level.id);
+      for (const level of beyond25) {
+        if (level.id) {
+          await supabase.from('extended_levels').update({ rank: level.rank }).eq('id', level.id);
         }
       }
 
-      // Reload all data
+      // Reload everything
       await loadData();
       
       setShowAddModal(false);
       setNewLevelData({ name: '', creator: '', gddlRank: '', points: '' });
     } catch (error) {
       console.error('Error adding level:', error);
-      alert('Error adding level. Please try again.');
+      alert('Error adding level: ' + error.message);
     }
     
     setSaving(false);
@@ -458,6 +451,12 @@ const DemonListTracker = () => {
                         inputMode="numeric"
                         value={level[player] || 0}
                         onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            saveProgress(level.id, player, e.target.value, isExtended);
+                            e.target.blur();
+                          }
+                        }}
                         className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                       <span className="text-white/70 text-sm">%</span>
@@ -688,7 +687,7 @@ const DemonListTracker = () => {
             <li>Click the refresh button (↻) to manually reload data</li>
             <li>Higher GDDL rank = harder level (e.g., 25.56 is rank #1)</li>
             <li>Only the top 25 levels appear on the main list</li>
-            <li>Enter progress as a percentage (0-100) for each player</li>
+            <li>Enter progress as a percentage (0-100) for each player, then press Enter to save</li>
             <li>100% completion awards the full level points, lower percentages award fractional points (e.g., 23% = 0.23 points)</li>
             <li>Total Points includes points from both Main and Extended lists</li>
           </ul>
