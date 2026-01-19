@@ -598,14 +598,14 @@ const DemonListTracker = () => {
                               type="text"
                               inputMode="numeric"
                               value={level[player] || 0}
-                              onChange={(e) => handleProgressChange(level.id, player, e.target.value, isExtended)}
+                              onChange={(e) => handleProgressChange(level.id, player, e.target.value, level.rank > 25)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
-                                  saveProgress(level.id, player, e.target.value, isExtended);
+                                  saveProgress(level.id, player, e.target.value, level.rank > 25);
                                   e.target.blur();
                                 }
                               }}
-                              onBlur={(e) => saveProgress(level.id, player, e.target.value, isExtended)}
+                              onBlur={(e) => saveProgress(level.id, player, e.target.value, level.rank > 25)}
                               className="w-16 px-2 py-1 bg-white/20 border border-white/30 rounded text-white text-center focus:ring-2 focus:ring-purple-500 focus:border-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                             />
                             <span className="text-white/70 text-sm">%</span>
@@ -620,7 +620,7 @@ const DemonListTracker = () => {
                 
                 <td className="px-4 py-3 text-center">
                   <button
-                    onClick={() => deleteLevel(level.id, isExtended)}
+                    onClick={() => deleteLevel(level.id, level.rank > 25)}
                     className="bg-red-500/20 hover:bg-red-500/40 text-red-300 p-2 rounded transition-all"
                     title="Delete level"
                   >
