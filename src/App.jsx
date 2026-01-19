@@ -410,8 +410,6 @@ const DemonListTracker = () => {
   };
 
   const addPlayer = async () => {
-
-  const addPlayer = async () => {
     const playerName = prompt('Enter player name:');
     if (!playerName || playerName.trim() === '') return;
     
@@ -873,7 +871,6 @@ const DemonListTracker = () => {
       </div>
     </div>
   );
-  }
 };
 
 export default DemonListTracker;
