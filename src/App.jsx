@@ -344,11 +344,22 @@ const DemonListTracker = () => {
 
           const newRank = beyond25After.findIndex(l => l.id === level.id) + 26;
           
-          // Copy to extended_levels
-          const { id, created_at, ...dataToMove } = level;
+          // Copy to extended_levels - explicitly list all fields to preserve
           const { error: copyError } = await supabase
             .from('extended_levels')
-            .insert([{ ...dataToMove, rank: newRank }]);
+            .insert([{
+              name: level.name,
+              creator: level.creator,
+              gddl_rank: level.gddl_rank,
+              points: level.points,
+              rank: newRank,
+              judah: level.judah,
+              whitman: level.whitman,
+              jack: level.jack,
+              judah_locked: level.judah_locked,
+              whitman_locked: level.whitman_locked,
+              jack_locked: level.jack_locked
+            }]);
           
           if (copyError) {
             console.error('Copy error:', copyError);
@@ -385,9 +396,20 @@ const DemonListTracker = () => {
           
           const newRank = top25After.findIndex(l => l.id === level.id) + 1;
           
-          // Copy to levels
-          const { id, created_at, ...dataToMove } = level;
-          await supabase.from('levels').insert([{ ...dataToMove, rank: newRank }]);
+          // Copy to levels - explicitly list all fields to preserve
+          await supabase.from('levels').insert([{
+            name: level.name,
+            creator: level.creator,
+            gddl_rank: level.gddl_rank,
+            points: level.points,
+            rank: newRank,
+            judah: level.judah,
+            whitman: level.whitman,
+            jack: level.jack,
+            judah_locked: level.judah_locked,
+            whitman_locked: level.whitman_locked,
+            jack_locked: level.jack_locked
+          }]);
           
           // Delete from extended_levels
           await supabase.from('extended_levels').delete().eq('id', level.id);
