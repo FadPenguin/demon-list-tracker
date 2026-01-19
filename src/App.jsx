@@ -61,7 +61,7 @@ const DemonListTracker = () => {
         setPlayers(detectedPlayers);
       }
     } else {
-      await initializeDefaultLevels();
+      setLevels([]);
     }
   };
 
