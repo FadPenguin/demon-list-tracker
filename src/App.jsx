@@ -327,19 +327,62 @@ const DemonListTracker = () => {
         top25.find(l => l.id === id)
       );
 
+      // Track points to bank when levels move from main to extended
+      let pointsToBank = {
+        judah: 0,
+        whitman: 0,
+        jack: 0
+      };
+
       // Move levels from main to extended
       for (const levelId of shouldBeExtended) {
         const levelData = levels.find(l => l.id === levelId);
         const newRankData = beyond25.find(l => l.id === levelId);
         
-        // Insert into extended_levels
+        // Calculate earned points for each player before moving
+        ['judah', 'whitman', 'jack'].forEach(player => {
+          const progress = levelData[player];
+          if (progress === 100) {
+            pointsToBank[player] += levelData.points;
+          } else if (progress > 0) {
+            pointsToBank[player] += progress / 100;
+          }
+        });
+        
+        // Insert into extended_levels with ALL existing data preserved
         await supabase.from('extended_levels').insert([{
-          ...levelData,
-          rank: newRankData.rank
+          name: levelData.name,
+          creator: levelData.creator,
+          gddl_rank: levelData.gddl_rank,
+          points: levelData.points,
+          rank: newRankData.rank,
+          judah: levelData.judah,
+          whitman: levelData.whitman,
+          jack: levelData.jack,
+          judah_locked: levelData.judah_locked,
+          whitman_locked: levelData.whitman_locked,
+          jack_locked: levelData.jack_locked
         }]);
         
         // Delete from levels
         await supabase.from('levels').delete().eq('id', levelId);
+      }
+
+      // Update banked points if any levels moved to extended
+      if (pointsToBank.judah > 0 || pointsToBank.whitman > 0 || pointsToBank.jack > 0) {
+        const { data: currentBanked } = await supabase
+          .from('banked_points')
+          .select('*')
+          .single();
+
+        await supabase
+          .from('banked_points')
+          .update({
+            judah: (currentBanked?.judah || 0) + pointsToBank.judah,
+            whitman: (currentBanked?.whitman || 0) + pointsToBank.whitman,
+            jack: (currentBanked?.jack || 0) + pointsToBank.jack
+          })
+          .eq('id', 1);
       }
 
       // Move levels from extended to main
@@ -347,10 +390,19 @@ const DemonListTracker = () => {
         const levelData = extendedList.find(l => l.id === levelId);
         const newRankData = top25.find(l => l.id === levelId);
         
-        // Insert into levels
+        // Insert into levels with ALL existing data preserved
         await supabase.from('levels').insert([{
-          ...levelData,
-          rank: newRankData.rank
+          name: levelData.name,
+          creator: levelData.creator,
+          gddl_rank: levelData.gddl_rank,
+          points: levelData.points,
+          rank: newRankData.rank,
+          judah: levelData.judah,
+          whitman: levelData.whitman,
+          jack: levelData.jack,
+          judah_locked: levelData.judah_locked,
+          whitman_locked: levelData.whitman_locked,
+          jack_locked: levelData.jack_locked
         }]);
         
         // Delete from extended_levels
